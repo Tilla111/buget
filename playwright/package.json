@@ -1,0 +1,12 @@
+{
+  "name": "buget-playwright-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UI loop tests with screenshots and video",
+  "scripts": {
+    "test": "playwright test --project=chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2"
+  }
+}

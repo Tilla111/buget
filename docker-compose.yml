@@ -1,0 +1,85 @@
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: buget-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+      - --storage.tsdb.retention.time=7d
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:11.1.4
+    container_name: buget-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+  k6:
+    build:
+      context: ./k6
+      dockerfile: Dockerfile
+    container_name: buget-k6
+    environment:
+      LOAD_TEST_URL: ${LOAD_TEST_URL}
+      LOAD_REQUEST_METHOD: ${LOAD_REQUEST_METHOD:-GET}
+      LOAD_REQUEST_HEADERS: ${LOAD_REQUEST_HEADERS:-{}}
+      LOAD_REQUEST_BODY: ${LOAD_REQUEST_BODY:-}
+      LOAD_REQUEST_TIMEOUT: ${LOAD_REQUEST_TIMEOUT:-15s}
+      LOAD_EXPECTED_STATUS_CODES: ${LOAD_EXPECTED_STATUS_CODES:-200,301,302,304}
+      LOAD_MODE: ${LOAD_MODE:-ramp}
+      LOAD_START_RATE: ${LOAD_START_RATE:-1000}
+      LOAD_STAGES: ${LOAD_STAGES:-1000:1m,2000:1m,3000:1m,4000:1m,5000:1m,5000:1m}
+      LOAD_RATE: ${LOAD_RATE:-5000}
+      LOAD_DURATION: ${LOAD_DURATION:-6m}
+      LOAD_PRE_ALLOCATED_VUS: ${LOAD_PRE_ALLOCATED_VUS:-2300}
+      LOAD_MAX_VUS: ${LOAD_MAX_VUS:-2000}
+      LOAD_ACCEPTABLE_P95_MS: ${LOAD_ACCEPTABLE_P95_MS:-800}
+      LOAD_ACCEPTABLE_ERROR_RATE: ${LOAD_ACCEPTABLE_ERROR_RATE:-0.01}
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: p(90),p(95),p(99),avg,min,max
+    command: ["run", "-o", "experimental-prometheus-rw", "/scripts/stress.js"]
+    volumes:
+      - ./k6/scripts:/scripts:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    profiles: ["load"]
+
+  playwright:
+    build:
+      context: ./playwright
+      dockerfile: Dockerfile
+    container_name: buget-playwright
+    environment:
+      PAGE_URL: ${PAGE_URL}
+      LOOP_COUNT: ${LOOP_COUNT:-20}
+      LOOP_DELAY_MS: ${LOOP_DELAY_MS:-1000}
+      PLAYWRIGHT_HEADLESS: ${PLAYWRIGHT_HEADLESS:-true}
+    volumes:
+      - ./playwright/tests:/app/tests:ro
+      - ./playwright/playwright.config.js:/app/playwright.config.js:ro
+      - ./artifacts:/app/artifacts
+    command: ["npx", "playwright", "test", "--project=chromium"]
+    profiles: ["ui"]
+
+volumes:
+  prometheus-data:
+  grafana-data:
