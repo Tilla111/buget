@@ -1,8 +1,13 @@
+#!/usr/bin/env pwsh
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $projectRoot = (Get-Location).Path
-$scriptVersion = "run-all.ps1 v3.1"
+$scriptVersion = "run-all.ps1 v4.0"
 $PSNativeCommandUseErrorActionPreference = $false
+$isWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+  [System.Runtime.InteropServices.OSPlatform]::Windows
+)
 
 Write-Host $scriptVersion
 
@@ -37,6 +42,10 @@ function Ensure-DockerReady {
     return
   }
 
+  if (-not $isWindows) {
+    throw "Docker engine is not reachable. Start Docker Desktop or dockerd and rerun 'pwsh ./run-all.ps1'."
+  }
+
   $dockerDesktopExe = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
   $dockerService = Get-Service -Name "com.docker.service" -ErrorAction SilentlyContinue
   if ($null -ne $dockerService -and $dockerService.Status -ne "Running") {
@@ -65,7 +74,7 @@ function Ensure-DockerReady {
     }
   }
 
-  throw "Docker engine is not running. Open Docker Desktop and wait until Engine is running, then rerun .\run-all.ps1."
+  throw "Docker engine is not running. Open Docker Desktop and wait until Engine is running, then rerun 'pwsh ./run-all.ps1'."
 }
 
 function Invoke-ComposeChecked {
@@ -111,15 +120,16 @@ Ensure-DockerReady
 Write-Host "Starting Prometheus + Grafana..."
 Invoke-ComposeChecked -Args @("up", "-d", "prometheus", "grafana")
 
-if (-not (Test-Path "artifacts")) {
-  New-Item -ItemType Directory -Path "artifacts" | Out-Null
+$artifactsDir = Join-Path $projectRoot "artifacts"
+if (-not (Test-Path $artifactsDir)) {
+  New-Item -ItemType Directory -Path $artifactsDir | Out-Null
 }
 
-Write-Host "Running k6 (load) and Playwright (UI loop) in parallel..."
-$k6OutLog = Join-Path $projectRoot "artifacts\k6.out.log"
-$k6ErrLog = Join-Path $projectRoot "artifacts\k6.err.log"
-$uiOutLog = Join-Path $projectRoot "artifacts\playwright.out.log"
-$uiErrLog = Join-Path $projectRoot "artifacts\playwright.err.log"
+Write-Host "Running k6 (frontend load) and Playwright (frontend flow audit) in parallel..."
+$k6OutLog = Join-Path $artifactsDir "k6.out.log"
+$k6ErrLog = Join-Path $artifactsDir "k6.err.log"
+$uiOutLog = Join-Path $artifactsDir "playwright.out.log"
+$uiErrLog = Join-Path $artifactsDir "playwright.err.log"
 
 $k6Proc = Start-ComposeProcess `
   -Args @("--profile", "load", "run", "--rm", "k6") `
@@ -167,3 +177,4 @@ Write-Host "Grafana: http://localhost:$grafanaPort"
 Write-Host "Dashboard: http://localhost:$grafanaPort/d/k6-load-overview/k6-load-overview"
 Write-Host "Prometheus: http://localhost:$prometheusPort"
 Write-Host "Artifacts: ./artifacts"
+Write-Host "Frontend summary: ./artifacts/frontend-performance/summary.md"
