@@ -197,6 +197,72 @@ function createThresholdViolations(metrics, issueTotals, scopeLabel = "") {
   return violations;
 }
 
+function createInventoryBucket(domain) {
+  return {
+    domain,
+    count: 0,
+    transferSize: 0,
+    decodedBodySize: 0,
+    initiatorCounts: {},
+    scriptUrls: [],
+  };
+}
+
+function mergeInventoryEntries(samples, key) {
+  const buckets = new Map();
+
+  for (const sample of samples) {
+    for (const entry of sample[key] || []) {
+      let bucket = buckets.get(entry.domain);
+      if (!bucket) {
+        bucket = createInventoryBucket(entry.domain);
+        buckets.set(entry.domain, bucket);
+      }
+
+      bucket.count += entry.count || 0;
+      bucket.transferSize += entry.transferSize || 0;
+      bucket.decodedBodySize += entry.decodedBodySize || 0;
+
+      for (const [initiatorType, count] of Object.entries(entry.initiatorCounts || {})) {
+        bucket.initiatorCounts[initiatorType] = (bucket.initiatorCounts[initiatorType] || 0) + count;
+      }
+
+      for (const url of entry.scriptUrls || []) {
+        if (!bucket.scriptUrls.includes(url) && bucket.scriptUrls.length < 20) {
+          bucket.scriptUrls.push(url);
+        }
+      }
+    }
+  }
+
+  return Array.from(buckets.values())
+    .map((entry) => ({
+      ...entry,
+      transferSize: round(entry.transferSize, 2),
+      decodedBodySize: round(entry.decodedBodySize, 2),
+      scriptUrls: entry.scriptUrls.slice(0, 10),
+    }))
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      return right.transferSize - left.transferSize;
+    });
+}
+
+function createNetworkInventory(samples) {
+  return {
+    requestDomains: mergeInventoryEntries(samples, "resourceDomains"),
+    scriptDomains: mergeInventoryEntries(samples, "scriptDomains"),
+  };
+}
+
+function formatInventoryLine(entry) {
+  const scripts = entry.initiatorCounts.script || 0;
+  return `- ${entry.domain}: requests ${entry.count}, scripts ${scripts}, transfer ${formatBytes(entry.transferSize)}`;
+}
+
 function buildMarkdownSummary(summary) {
   const lines = [
     "# Frontend Performance Summary",
@@ -274,6 +340,40 @@ function buildMarkdownSummary(summary) {
   lines.push(
     `- Avg transfer size: ${summary.metrics.transferSize ? formatBytes(summary.metrics.transferSize.avg) : "0 B"}`,
   );
+
+  if (summary.networkInventory.requestDomains.length) {
+    lines.push("");
+    lines.push("## Request Domain Inventory");
+    for (const entry of summary.networkInventory.requestDomains.slice(0, 10)) {
+      lines.push(formatInventoryLine(entry));
+    }
+  }
+
+  if (summary.networkInventory.scriptDomains.length) {
+    lines.push("");
+    lines.push("## Script Domain Inventory");
+    for (const entry of summary.networkInventory.scriptDomains.slice(0, 10)) {
+      lines.push(formatInventoryLine(entry));
+      for (const scriptUrl of entry.scriptUrls.slice(0, 5)) {
+        lines.push(`  JS: ${scriptUrl}`);
+      }
+    }
+  }
+
+  for (const routeSummary of summary.routeSummaries) {
+    if (!routeSummary.networkInventory.scriptDomains.length) {
+      continue;
+    }
+
+    lines.push("");
+    lines.push(`## Route Script Inventory: ${routeSummary.routeUrl}`);
+    for (const entry of routeSummary.networkInventory.scriptDomains.slice(0, 5)) {
+      lines.push(formatInventoryLine(entry));
+      for (const scriptUrl of entry.scriptUrls.slice(0, 5)) {
+        lines.push(`  JS: ${scriptUrl}`);
+      }
+    }
+  }
 
   if (summary.violations.length) {
     lines.push("");
@@ -354,14 +454,67 @@ async function collectPageMetrics(page) {
     const navigationEntry = performance.getEntriesByType("navigation")[0];
     const resourceEntries = performance.getEntriesByType("resource");
     const initiatorCounts = {};
+    const resourceDomains = {};
+    const scriptDomains = {};
     let transferSize = 0;
     let decodedBodySize = 0;
 
+    const ensureBucket = (collection, domain) => {
+      if (!collection[domain]) {
+        collection[domain] = {
+          domain,
+          count: 0,
+          transferSize: 0,
+          decodedBodySize: 0,
+          initiatorCounts: {},
+          scriptUrls: [],
+        };
+      }
+
+      return collection[domain];
+    };
+
+    const isScriptResource = (entryUrl, initiatorType) => {
+      if (initiatorType === "script") {
+        return true;
+      }
+
+      try {
+        return /\.(m?js)(?:$|[?#])/i.test(new URL(entryUrl).pathname);
+      } catch (error) {
+        return false;
+      }
+    };
+
     for (const entry of resourceEntries) {
       const type = entry.initiatorType || "other";
+      let domain = "invalid";
+      try {
+        domain = new URL(entry.name).host || "same-origin";
+      } catch (error) {
+        domain = "invalid";
+      }
+
       initiatorCounts[type] = (initiatorCounts[type] || 0) + 1;
       transferSize += entry.transferSize || 0;
       decodedBodySize += entry.decodedBodySize || 0;
+
+      const resourceBucket = ensureBucket(resourceDomains, domain);
+      resourceBucket.count += 1;
+      resourceBucket.transferSize += entry.transferSize || 0;
+      resourceBucket.decodedBodySize += entry.decodedBodySize || 0;
+      resourceBucket.initiatorCounts[type] = (resourceBucket.initiatorCounts[type] || 0) + 1;
+
+      if (isScriptResource(entry.name, type)) {
+        const scriptBucket = ensureBucket(scriptDomains, domain);
+        scriptBucket.count += 1;
+        scriptBucket.transferSize += entry.transferSize || 0;
+        scriptBucket.decodedBodySize += entry.decodedBodySize || 0;
+        scriptBucket.initiatorCounts[type] = (scriptBucket.initiatorCounts[type] || 0) + 1;
+        if (!scriptBucket.scriptUrls.includes(entry.name) && scriptBucket.scriptUrls.length < 20) {
+          scriptBucket.scriptUrls.push(entry.name);
+        }
+      }
     }
 
     return {
@@ -374,6 +527,8 @@ async function collectPageMetrics(page) {
       decodedBodySize: decodedBodySize + (navigationEntry ? navigationEntry.decodedBodySize || 0 : 0),
       resourceCount: resourceEntries.length,
       initiatorCounts,
+      resourceDomains: Object.values(resourceDomains).sort((left, right) => right.count - left.count),
+      scriptDomains: Object.values(scriptDomains).sort((left, right) => right.count - left.count),
       observerErrors: (window.__frontendPerf && window.__frontendPerf.observerErrors) || [],
       fcp: window.__frontendPerf ? window.__frontendPerf.fcp : null,
       lcp: window.__frontendPerf ? window.__frontendPerf.lcp : null,
@@ -494,6 +649,7 @@ test("frontend loop with performance summary", async ({ page }, testInfo) => {
       sampleCount: routeSamples.length,
       metrics: routeMetrics,
       issueTotals: routeIssueTotals,
+      networkInventory: createNetworkInventory(routeSamples),
       violations: createThresholdViolations(routeMetrics, routeIssueTotals, `${routeUrl}: `),
     };
   });
@@ -512,6 +668,7 @@ test("frontend loop with performance summary", async ({ page }, testInfo) => {
     thresholds,
     metrics,
     issueTotals,
+    networkInventory: createNetworkInventory(samples),
     routeSummaries,
     phases: {
       firstIteration: {

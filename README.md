@@ -16,6 +16,7 @@ Copy-Item .env.example .env
 
 `.env` ichida kamida bularni to'ldiring:
 - `LOAD_TEST_URL`: `k6` uradigan API yoki sahifa URL.
+- `LOAD_TEST_URLS`: bir nechta frontend route bo'lsa, vergul yoki yangi qatordan ro'yxat.
 - `PAGE_URL`: `Playwright` ochadigan UI sahifa URL.
 - `LOAD_REQUEST_HEADERS`: auth yoki kerakli headerlar.
 - `LOAD_EXPECTED_STATUS_CODES`: muvaffaqiyat deb hisoblanadigan statuslar.
@@ -74,9 +75,12 @@ Default maqsad:
 Agar `LOAD_TEST_URL` HTML sahifa bo'lsa, `k6` CSS/JS assetlarni ham batch qilib urishi mumkin:
 
 ```env
+LOAD_TEST_URLS=https://example.com,https://example.com/about
+LOAD_ROUTE_NAMES=home,about
+LOAD_ROUTE_WEIGHTS=3,1
 LOAD_INCLUDE_PAGE_ASSETS=true
 LOAD_INCLUDE_PAGE_IMAGES=false
-LOAD_MAX_PAGE_ASSETS=24
+LOAD_MAX_PAGE_ASSETS=60
 LOAD_PAGE_ASSET_HOSTS=cdn.example.com,static.example.com
 LOAD_ACCEPTABLE_PAGE_P95_MS=5000
 ```
@@ -87,6 +91,11 @@ Bu rejim quyidagilarni beradi:
 - `page_total_duration`
 - `page_asset_count`
 - `page_asset_failures`
+
+Qo'shimcha:
+- `LOAD_TEST_URLS` bo'lsa, `k6` har iteratsiyada route tanlaydi.
+- `LOAD_ROUTE_WEIGHTS` traffic ulushini boshqaradi. Masalan `3,1` home/detail nisbatini beradi.
+- barcha requestlar `route=<label>` tegi bilan yuboriladi; Grafana/Prometheus'da route kesimida ko'rish osonlashadi.
 
 Eslatma:
 - bu browser render vaqtini bermaydi;
