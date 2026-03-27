@@ -50,6 +50,15 @@ URL:
 - Prometheus: `http://localhost:${PROMETHEUS_PORT}` (default `9090`)
 - k6 dashboard: `http://localhost:${GRAFANA_PORT}/d/k6-load-overview/k6-load-overview`
 
+Grafana dashboardda asosiy throughput formulalari:
+- `HTTP RPS = sum(rate(k6_http_reqs_total[$__rate_interval]))`
+- `Page RPS = sum(rate(k6_iterations_total[$__rate_interval]))`
+- `Requests / Page = HTTP RPS / Page RPS`
+
+Yangi panel ko'rinmasa:
+- 10-15 soniya kuting, provisioning auto-refresh qiladi
+- browser sahifasini refresh qiling
+
 ## 3) k6 load test
 
 Oddiy HTTP load:
@@ -91,6 +100,7 @@ Bu rejim quyidagilarni beradi:
 - `page_total_duration`
 - `page_asset_count`
 - `page_asset_failures`
+- Grafana'da alohida `HTTP RPS`, `Page RPS`, `Requests / Page`
 
 Qo'shimcha:
 - `LOAD_TEST_URLS` bo'lsa, `k6` har iteratsiyada route tanlaydi.
